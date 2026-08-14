@@ -28,7 +28,6 @@ public class CollectorService {
 
         Map<String, CryptoCurrencyDTO> symbolMap = all.stream()
                 .filter(cryptoCurrencyDTO -> cryptoCurrencyDTO.getSymbol().endsWith("_usdt"))
-//                .filter(cryptoCurrencyDTO -> Double.parseDouble(cryptoCurrencyDTO.getLatest()) > 1.0)
                 .filter(cryptoCurrencyDTO -> isNotPresentInSignals(cryptoCurrencyDTO.getSymbol()))
                 .collect(Collectors.toMap(CryptoCurrencyDTO::getSymbol,
                         cryptoCurrencyDTO -> cryptoCurrencyDTO));

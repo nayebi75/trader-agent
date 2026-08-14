@@ -1,6 +1,8 @@
 package org.agent.service;
 
+
 import lombok.extern.slf4j.Slf4j;
+import org.agent.service.dto.AnalysisResultDto;
 import org.agent.service.dto.CryptoCurrencyDTO;
 import org.agent.service.dto.TradeSignalDTO;
 import org.agent.utils.DataUtils;
@@ -37,9 +39,8 @@ public class SignalDetector implements Runnable {
         cryptoCurrencies.forEach(cryptoCurrencyDTO -> {
             try {
                 String cryptoCurrency = cryptoCurrencyDTO.getSymbol();
-                StrategyService.AnalysisResult analysisResult =
-                        strategyService.cryptoCurrencyAnalysisResult(cryptoCurrency);
-                if (analysisResult.hasBuySignal()) {
+                AnalysisResultDto analysisResult = strategyService.getAnalysisResult(cryptoCurrency);
+                if (analysisResult.getHasBuySignal()) {
                     log.info("cryptoCurrency: '{}' has buy signal", cryptoCurrency);
                     saveSignal(cryptoCurrencyDTO, analysisResult);
                     numberOfSignals.incrementAndGet();
@@ -59,21 +60,18 @@ public class SignalDetector implements Runnable {
         log.info("saved: {} signals and exit from findAndSaveTradeSignals", numberOfSignals.get());
     }
 
-    private void saveSignal(CryptoCurrencyDTO cryptoCurrencyDTO, StrategyService.AnalysisResult analysisResult) {
+    private void saveSignal(CryptoCurrencyDTO cryptoCurrencyDTO, AnalysisResultDto analysisResult) {
         double entry = Double.parseDouble(cryptoCurrencyDTO.getLatest());
-//        double takeProfit = entry + ((entry * 3) / 100);
-//        double stopLoss = entry - ((entry * 1) / 100);
-
         long timestamp = ZonedDateTime.now(ZoneOffset.UTC).toEpochSecond();
         BigDecimal riskRewardRatio = calculateRiskRewardRatio(
-                BigDecimal.valueOf(entry), analysisResult.sl(), analysisResult.tp());
+                BigDecimal.valueOf(entry), analysisResult.getSl(), analysisResult.getTp());
         TradeSignalDTO tradeSignalDTO = TradeSignalDTO.builder()
                 .symbol(cryptoCurrencyDTO.getSymbol())
                 .entryPrice(entry)
                 .timestamp(timestamp)
                 .dateTime(TradeUtils.formatTimestamp(timestamp))
-                .stopLoss(analysisResult.sl().doubleValue())
-                .takeProfit(analysisResult.tp().doubleValue())
+                .stopLoss(analysisResult.getSl().doubleValue())
+                .takeProfit(analysisResult.getTp().doubleValue())
                 .result("riskRewardRatio: " + riskRewardRatio)
                 .build();
         DataUtils.saveSignal(tradeSignalDTO);
