@@ -1,1 +1,46 @@
-[]
+[ {
+  "symbol" : "tee_usdt",
+  "entryPrice" : 34.2239,
+  "rsi" : 0.0,
+  "timestamp" : 1771436648,
+  "dateTime" : "2026-02-18 21:14:08",
+  "stopLoss" : 33.8981,
+  "takeProfit" : 34.8553,
+  "resultChecked" : false,
+  "hitTp" : false,
+  "hitSL" : false,
+  "hitTpTimestamp" : 0,
+  "hitSlTimestamp" : 0,
+  "result" : "riskRewardRatio: 1.94",
+  "tpDays" : null
+}, {
+  "symbol" : "tee_usdt",
+  "entryPrice" : 34.0513,
+  "rsi" : 0.0,
+  "timestamp" : 1771264455,
+  "dateTime" : "2026-02-16 21:24:15",
+  "stopLoss" : 33.9269,
+  "takeProfit" : 34.8962,
+  "resultChecked" : false,
+  "hitTp" : false,
+  "hitSL" : false,
+  "hitTpTimestamp" : 0,
+  "hitSlTimestamp" : 0,
+  "result" : "riskRewardRatio: 6.79",
+  "tpDays" : null
+}, {
+  "symbol" : "hava_usdt",
+  "entryPrice" : 1.0008,
+  "rsi" : 0.0,
+  "timestamp" : 1771693629,
+  "dateTime" : "2026-02-21 20:37:09",
+  "stopLoss" : 0.9995,
+  "takeProfit" : 1.0031,
+  "resultChecked" : false,
+  "hitTp" : false,
+  "hitSL" : false,
+  "hitTpTimestamp" : 0,
+  "hitSlTimestamp" : 0,
+  "result" : "riskRewardRatio: 1.77",
+  "tpDays" : null
+} ]
