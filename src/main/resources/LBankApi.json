@@ -1,0 +1,32 @@
+{
+  "msg": "Success",
+  "result": "true",
+  "data": [
+    {
+      "symbol": "gnon_usdt",
+      "ticker": {
+        "high": "0.001827",
+        "vol": "44364656.38",
+        "low": "0.001434",
+        "change": "10.76",
+        "turnover": "70150.4196",
+        "latest": "0.001596"
+      },
+      "timestamp": 1751362321321
+    },
+    {
+      "symbol": "ava_usdt",
+      "ticker": {
+        "high": "0.5129",
+        "vol": "1600318.71",
+        "low": "0.4863",
+        "change": "-3.61",
+        "turnover": "807216.533",
+        "latest": "0.4944"
+      },
+      "timestamp": 1751362321650
+    }
+  ],
+  "error_code": 0,
+  "ts": 1751362322141
+}
