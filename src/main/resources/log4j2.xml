@@ -2,9 +2,8 @@
 <Configuration status="WARN">
     <Appenders>
         <Console name="Console" target="SYSTEM_OUT">
-            <!-- Add follow="true" for Windows -->
             <PatternLayout
-                    pattern="%d{yyyy-MM-dd HH:mm:ss} %highlight{[%t]}{cyan} %highlight{%-5level}{FATAL=red, ERROR=red, WARN=yellow, INFO=green, DEBUG=blue, TRACE=white} %style{%35logger{36}}{magenta} - %msg%n"
+                    pattern="%d{yyyy-MM-dd HH:mm:ss} %highlight{[%t]}{cyan} %highlight{%6level}{FATAL=red, ERROR=red, WARN=yellow, INFO=green, DEBUG=blue, TRACE=white} - %msg%n"
                     disableAnsi="false"/>
         </Console>
     </Appenders>
