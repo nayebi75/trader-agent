@@ -6,67 +6,140 @@ import org.agent.service.dto.CryptoCurrencyDTO;
 import org.agent.service.dto.TradeSignalDTO;
 import org.agent.utils.DataUtils;
 
+import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
+import java.util.Set;
 
 @Slf4j
 public class CollectorService {
 
+    private static final String QUOTE_CURRENCY_SUFFIX = "_usdt";
+    private static final long SIGNAL_COOLDOWN_HOURS = 12;
+
     private final ExchangeClient exchangeClient = new ExchangeClient();
 
     public List<CryptoCurrencyDTO> collectSignals() {
-        List<CryptoCurrencyDTO> result = new ArrayList<>();
-        List<CryptoCurrencyDTO> all = exchangeClient.getAvailableCryptoCurrencies();
-        log.info("fetched {} cryptocurrencies", all.size());
 
-        Map<String, CryptoCurrencyDTO> symbolMap = all.stream()
-                .filter(cryptoCurrencyDTO -> cryptoCurrencyDTO.getSymbol().endsWith("_usdt"))
-//                .filter(cryptoCurrencyDTO -> Double.parseDouble(cryptoCurrencyDTO.getLatest()) > 1.0)
-                .filter(cryptoCurrencyDTO -> isNotPresentInSignals(cryptoCurrencyDTO.getSymbol()))
-                .collect(Collectors.toMap(CryptoCurrencyDTO::getSymbol,
-                        cryptoCurrencyDTO -> cryptoCurrencyDTO));
+        List<CryptoCurrencyDTO> availableCryptoCurrencies = exchangeClient.getAvailableCryptoCurrencies();
 
-        List<String> hitTpSignalsByFrequencyOrder = loadHitTpTradeSignalsByOrder();
-        for (String symbol : hitTpSignalsByFrequencyOrder) {
-            if (symbolMap.containsKey(symbol)) {
-                result.add(symbolMap.get(symbol));
-                symbolMap.remove(symbol);
-            }
+        if (availableCryptoCurrencies == null || availableCryptoCurrencies.isEmpty()) {
+            log.warn("No cryptocurrencies returned by exchange");
+            return Collections.emptyList();
         }
 
-        result.addAll(symbolMap.values().stream().sorted(Comparator.reverseOrder()).toList());
+        log.info("Fetched {} cryptocurrencies from exchange", availableCryptoCurrencies.size());
+
+        Set<String> recentlySignaledSymbols = loadRecentlySignaledSymbols();
+
+        List<CryptoCurrencyDTO> result = availableCryptoCurrencies.stream()
+                .filter(this::isValidCryptoCurrency)
+                .filter(crypto -> !recentlySignaledSymbols.contains(crypto.getSymbol()))
+                .sorted(Comparator.comparing(this::getTurnover).reversed())
+                .toList();
+
+        log.info("Collected {} eligible USDT cryptocurrencies, excluded {} recently signaled symbols",
+                result.size(), recentlySignaledSymbols.size());
+
         return result;
     }
 
-    private List<String> loadHitTpTradeSignalsByOrder() {
-        List<TradeSignalDTO> hitTpSignals = DataUtils.loadHitTpTradeSignals();
-        return hitTpSignals.stream().map(TradeSignalDTO::getSymbol)
-                .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()))
-                .entrySet().stream()
-                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
-                .map(Map.Entry::getKey)
-                .toList();
-    }
+    private Set<String> loadRecentlySignaledSymbols() {
 
-    private static boolean isNotPresentInSignals(String cryptoCurrency) {
         try {
             List<TradeSignalDTO> previousSignals = DataUtils.loadTradeSignals();
-            return previousSignals.stream()
-                    .filter(signal -> signal.getSymbol().equals(cryptoCurrency))
-                    .filter(signal -> {
-                        long timestamp = signal.getTimestamp();
-                        ZonedDateTime signalZonedDateTime = ZonedDateTime.ofInstant(Instant.ofEpochSecond(timestamp), ZoneOffset.UTC);
-                        return !signalZonedDateTime.isBefore(ZonedDateTime.now(ZoneOffset.UTC).minusHours(12));
-                    }).toList().isEmpty();
+
+            if (previousSignals == null || previousSignals.isEmpty()) {
+                return Collections.emptySet();
+            }
+
+            long cutoffTimestamp = Instant.now().minusSeconds(SIGNAL_COOLDOWN_HOURS * 60 * 60).getEpochSecond();
+
+            Set<String> recentlySignaledSymbols = new HashSet<>();
+
+            for (TradeSignalDTO signal : previousSignals) {
+
+                if (signal == null || signal.getSymbol() == null || signal.getSymbol().isBlank()) {
+                    continue;
+                }
+
+                if (signal.getTimestamp() >= cutoffTimestamp) {
+                    recentlySignaledSymbols.add(signal.getSymbol());
+                }
+            }
+
+            return recentlySignaledSymbols;
+
         } catch (Exception e) {
-            return true;
+            log.error("Failed to load previous trade signals. Duplicate-signal filtering will be skipped", e);
+            return Collections.emptySet();
+        }
+    }
+
+    private boolean isValidCryptoCurrency(CryptoCurrencyDTO cryptoCurrency) {
+
+        if (cryptoCurrency == null) {
+            return false;
+        }
+
+        String symbol = cryptoCurrency.getSymbol();
+
+        if (symbol == null || symbol.isBlank() || !symbol.endsWith(QUOTE_CURRENCY_SUFFIX)) {
+            return false;
+        }
+
+        if (!isPositiveNumber(cryptoCurrency.getLatest())) {
+            log.debug("Skipping symbol {} because latest price is invalid: {}", symbol, cryptoCurrency.getLatest());
+            return false;
+        }
+
+        if (!isNonNegativeNumber(cryptoCurrency.getTurnover())) {
+            log.debug("Skipping symbol {} because turnover is invalid: {}", symbol, cryptoCurrency.getTurnover());
+            return false;
+        }
+
+        return true;
+    }
+
+    private BigDecimal getTurnover(CryptoCurrencyDTO cryptoCurrency) {
+
+        if (cryptoCurrency == null || cryptoCurrency.getTurnover() == null) {
+            return BigDecimal.ZERO;
+        }
+
+        try {
+            return new BigDecimal(cryptoCurrency.getTurnover());
+        } catch (NumberFormatException e) {
+            return BigDecimal.ZERO;
+        }
+    }
+
+    private boolean isPositiveNumber(String value) {
+
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+
+        try {
+            return new BigDecimal(value).compareTo(BigDecimal.ZERO) > 0;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private boolean isNonNegativeNumber(String value) {
+
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+
+        try {
+            return new BigDecimal(value).compareTo(BigDecimal.ZERO) >= 0;
+        } catch (NumberFormatException e) {
+            return false;
         }
     }
 }
