@@ -13,7 +13,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
-public class Main {
+public class TraderAgent {
 
     private static ScheduledExecutorService signalCheckerScheduler;
     private static ScheduledExecutorService signalDetectorScheduler;
