@@ -5,6 +5,7 @@ import org.agent.constants.SignalStatus;
 import org.agent.service.dto.CryptoCurrencyDTO;
 import org.agent.service.dto.TradeSignalDTO;
 import org.agent.utils.DataUtils;
+import org.apache.commons.lang3.StringUtils;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -41,7 +42,7 @@ public class SignalDetector implements Runnable {
             try {
                 analyzeCryptoCurrency(cryptoCurrencyDTO, numberOfSignals);
             } catch (IllegalStateException e) {
-                log.info(e.getMessage());
+                logNoBuySignal(cryptoCurrencyDTO.getSymbol(), "Rejected: " + e.getMessage());
             } catch (Exception e) {
                 log.error("Error analyzing symbol {}: {}", cryptoCurrencyDTO.getSymbol(), e.getMessage(), e);
             }
@@ -57,7 +58,7 @@ public class SignalDetector implements Runnable {
         StrategyService.AnalysisResult analysisResult = strategyService.cryptoCurrencyAnalysisResult(symbol);
 
         if (!analysisResult.hasBuySignal()) {
-            log.debug("No buy signal for symbol: {}, reason: {}", symbol, analysisResult.reason());
+            logNoBuySignal(symbol, analysisResult.reason());
             return;
         }
 
@@ -73,6 +74,10 @@ public class SignalDetector implements Runnable {
                 analysisResult.rsi(),
                 analysisResult.riskRewardRatio()
         );
+    }
+
+    private void logNoBuySignal(String symbol, String cause) {
+        log.debug("No buy signal for symbol: {}, {}", StringUtils.leftPad(symbol, 17, "_"), cause);
     }
 
     private void saveSignal(String symbol, StrategyService.AnalysisResult analysisResult) {

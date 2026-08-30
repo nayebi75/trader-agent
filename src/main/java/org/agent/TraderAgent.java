@@ -1,82 +1,125 @@
 package org.agent;
 
-
 import lombok.extern.slf4j.Slf4j;
-
 import org.agent.service.SignalChecker;
 import org.agent.service.SignalDetector;
-import sun.misc.Signal;
 
 import java.net.InetAddress;
+import java.time.Duration;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
-public class TraderAgent {
+public final class TraderAgent {
 
-    private static ScheduledExecutorService signalCheckerScheduler;
+    private static final Duration SIGNAL_DETECTOR_INTERVAL = Duration.ofMinutes(10);
+    private static final Duration SIGNAL_CHECKER_INTERVAL = Duration.ofMinutes(5);
+    private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(15);
+
     private static ScheduledExecutorService signalDetectorScheduler;
+    private static ScheduledExecutorService signalCheckerScheduler;
 
     public static void main(String[] args) {
-        logApplicationStartUp();
-        runSignalDetectorScheduledTask();
-        runSignalCheckerScheduledTask();
-        handleGracefulShutdown();
+        logApplicationStartup();
+        registerShutdownHook();
+
+        signalDetectorScheduler = createScheduler("signal-detector-thread");
+        signalCheckerScheduler = createScheduler("signal-checker-thread");
+
+        scheduleTask(signalDetectorScheduler, new SignalDetector(), SIGNAL_DETECTOR_INTERVAL, "SignalDetector");
+
+        scheduleTask(signalCheckerScheduler, new SignalChecker(), SIGNAL_CHECKER_INTERVAL, "SignalChecker");
     }
 
-    private static void logApplicationStartUp() {
+    private static void logApplicationStartup() {
         try {
-            log.info(
-                    """
-                                                        
-                            ----------------------------------------------------------
-                            \tApplication is running!
-                            \tIP: '{}'
-                            ----------------------------------------------------------
-                            """,
-                    InetAddress.getLocalHost().getHostAddress()
-            );
+            String ipAddress = InetAddress.getLocalHost().getHostAddress();
+            log.info("TraderAgent started successfully. IP: {}", ipAddress);
         } catch (Exception e) {
-            log.error("failed to start application with message: {}", e.getMessage(), e);
+            log.warn("Application started, but local IP address could not be resolved", e);
         }
     }
 
-    private static void runSignalDetectorScheduledTask() {
-        Runnable task = new SignalDetector();
-        signalDetectorScheduler = buildThreadScheduledExecutor("signal-detector-thread");
-        signalDetectorScheduler.scheduleAtFixedRate(task, 0, 10, TimeUnit.MINUTES);
-    }
+    private static ScheduledExecutorService createScheduler(String threadName) {
+        ThreadFactory threadFactory = runnable -> {
+            Thread thread = new Thread(runnable, threadName);
 
-    private static void runSignalCheckerScheduledTask() {
-        Runnable task = new SignalChecker();
-        signalCheckerScheduler = buildThreadScheduledExecutor("signal-checker-thread");
-        signalCheckerScheduler.scheduleAtFixedRate(task, 0, 5, TimeUnit.MINUTES);
-    }
+            thread.setDaemon(false);
 
-    private static ScheduledExecutorService buildThreadScheduledExecutor(String threadName) {
-        return Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r);
-            t.setName(threadName);
-            t.setDaemon(false);
-            t.setUncaughtExceptionHandler((thread, ex) ->
-                    log.error("Uncaught exception in {}", thread.getName(), ex)
+            thread.setUncaughtExceptionHandler((currentThread, exception) ->
+                    log.error("Uncaught exception in thread '{}'", currentThread.getName(), exception)
             );
-            return t;
-        });
+
+            return thread;
+        };
+
+        return Executors.newSingleThreadScheduledExecutor(threadFactory);
     }
 
+    private static void scheduleTask(ScheduledExecutorService scheduler, Runnable task, Duration interval, String taskName) {
+        Runnable safeTask = () -> {
+            try {
+                task.run();
+            } catch (Throwable throwable) {
+                log.error("Unexpected error while executing scheduled task '{}'", taskName, throwable);
+            }
+        };
 
-    private static void handleGracefulShutdown() {
-        // Register SIGINT handler (Ctrl+C / IntelliJ Stop button)
-        Signal.handle(new Signal("INT"), signal -> {
-            log.info("SIGINT received cleanup resources");
-            if (signalDetectorScheduler != null && !signalDetectorScheduler.isShutdown())
-                signalDetectorScheduler.shutdown();
-            if (signalCheckerScheduler != null && !signalCheckerScheduler.isShutdown())
-                signalCheckerScheduler.shutdown();
-            log.info("Shutdown complete. Exiting...");
-            System.exit(0);
-        });
+        scheduler.scheduleWithFixedDelay(safeTask, 0, interval.toMillis(), TimeUnit.MILLISECONDS);
+
+        log.info("{} scheduled to run every {} minutes", taskName, interval.toMinutes());
+    }
+
+    private static void registerShutdownHook() {
+        Thread shutdownThread = new Thread(TraderAgent::shutdown, "trader-agent-shutdown");
+
+        Runtime.getRuntime().addShutdownHook(shutdownThread);
+    }
+
+    private static void shutdown() {
+        log.info("Shutdown requested. Stopping TraderAgent...");
+
+        shutdownScheduler("SignalDetector", signalDetectorScheduler);
+
+        shutdownScheduler("SignalChecker", signalCheckerScheduler);
+
+        log.info("TraderAgent shutdown completed");
+    }
+
+    private static void shutdownScheduler(String name, ScheduledExecutorService scheduler) {
+        if (scheduler == null || scheduler.isShutdown()) {
+            return;
+        }
+
+        log.info("Stopping {} scheduler...", name);
+
+        scheduler.shutdown();
+
+        try {
+            boolean terminated = scheduler.awaitTermination(SHUTDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+            if (!terminated) {
+                forceShutdown(name, scheduler);
+            }
+        } catch (InterruptedException e) {
+            log.warn("Interrupted while waiting for {} scheduler to stop", name);
+
+            scheduler.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void forceShutdown(String name, ScheduledExecutorService scheduler) throws InterruptedException {
+        log.warn("{} scheduler did not stop within {} seconds. Forcing shutdown...", name, SHUTDOWN_TIMEOUT.toSeconds());
+
+        scheduler.shutdownNow();
+
+        boolean terminated = scheduler.awaitTermination(SHUTDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+        if (!terminated) {
+            log.error("{} scheduler could not be terminated", name);
+        }
     }
 }

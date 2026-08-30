@@ -116,8 +116,7 @@ public class StrategyService {
         BarSeries series = getHourlyBarSeries(symbol, config.getHourlyInterval(), config.getBarSeriesSize());
 
         if (series.getBarCount() < config.getMinimumBars()) {
-            throw new IllegalStateException(
-                    "Insufficient CLOSED candle data for symbol: " + symbol + ", bars=" + series.getBarCount());
+            throw new IllegalStateException("Insufficient CLOSED candle data, bars= " + series.getBarCount());
         }
 
         return analyzeSeries(series);
@@ -211,8 +210,23 @@ public class StrategyService {
                 series.numFactory().numOf(config.getMaxDistanceFromEma20Atr()));
 
         if (distanceFromEma20.isGreaterThan(maximumAllowedDistance)) {
+
+            double distancePercent = distanceFromEma20.dividedBy(currentClose)
+                    .multipliedBy(series.numFactory().numOf(100))
+                    .doubleValue();
+
             return AnalysisResult.noSignal(
-                    "Rejected: price is too extended from EMA20", currentRsi, candleEndTimestamp);
+                    String.format(
+                            "Rejected: price too extended from EMA20 [close=%.4f, EMA20=%.4f, ATR=%.4f, "
+                                    + "distance=%.4f, distancePct=%.2f%%, maxDistance=%.4f]",
+                            currentClose.doubleValue(),
+                            currentEma20.doubleValue(),
+                            currentAtr.doubleValue(),
+                            distanceFromEma20.doubleValue(),
+                            distancePercent,
+                            maximumAllowedDistance.doubleValue()
+                    ),
+                    currentRsi, candleEndTimestamp);
         }
 
         /*
