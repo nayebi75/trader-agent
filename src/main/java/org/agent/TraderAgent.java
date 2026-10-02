@@ -62,14 +62,14 @@ public final class TraderAgent {
         Runnable safeTask = () -> {
             try {
                 task.run();
-            } catch (Throwable throwable) {
-                log.error("Unexpected error while executing scheduled task '{}'", taskName, throwable);
+            } catch (Exception e) {
+                log.error("Unexpected error while executing scheduled task '{}'", taskName, e);
             }
         };
 
         scheduler.scheduleWithFixedDelay(safeTask, 0, interval.toMillis(), TimeUnit.MILLISECONDS);
 
-        log.info("{} scheduled to run every {} minutes", taskName, interval.toMinutes());
+        log.info("{} scheduled with a fixed delay of {} minutes", taskName, interval.toMinutes());
     }
 
     private static void registerShutdownHook() {
