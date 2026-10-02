@@ -109,8 +109,26 @@ public class StrategyService {
         }
     }
 
-    private final ExchangeClient exchangeClient = new ExchangeClient();
+    private final ExchangeClient exchangeClient;
     private final StrategyConfig config = new StrategyConfig();
+
+    public StrategyService() {
+        this(new ExchangeClient());
+    }
+
+    public StrategyService(ExchangeClient exchangeClient) {
+        this.exchangeClient = exchangeClient;
+    }
+
+    public long getLatestClosedCandleEndTimestamp(String symbol) {
+        BarSeries series = getHourlyBarSeries(symbol, config.getHourlyInterval(), 5);
+
+        if (series.getBarCount() == 0) {
+            throw new IllegalStateException("No CLOSED candle data returned for symbol: " + symbol);
+        }
+
+        return series.getBar(series.getEndIndex()).getEndTime().getEpochSecond();
+    }
 
     public AnalysisResult cryptoCurrencyAnalysisResult(String symbol) {
         BarSeries series = getHourlyBarSeries(symbol, config.getHourlyInterval(), config.getBarSeriesSize());
@@ -176,7 +194,8 @@ public class StrategyService {
         boolean ema50Rising = currentEma50.isGreaterThan(ema50.getValue(slopeIndex));
 
         if (!emaStructureBullish) {
-            return AnalysisResult.noSignal("Rejected: bullish EMA structure is missing", currentRsi, candleEndTimestamp);
+            return AnalysisResult.noSignal(
+                    "Rejected: bullish EMA structure is missing", currentRsi, candleEndTimestamp);
         }
 
         if (!ema50Rising) {

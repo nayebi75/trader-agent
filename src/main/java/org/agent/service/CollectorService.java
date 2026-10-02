@@ -238,7 +238,7 @@ public class CollectorService {
                     continue;
                 }
 
-                if (signal.getTimestamp() >= cutoffTimestamp) {
+                if (signal.getDetectedAtTimestamp() >= cutoffTimestamp) {
                     recentlySignaledSymbols.add(normalizeSymbol(signal.getSymbol()));
                 }
             }

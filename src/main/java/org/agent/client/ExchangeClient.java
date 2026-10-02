@@ -8,6 +8,7 @@ import org.agent.service.dto.CryptoCurrencyDTO;
 import org.agent.utils.TradeUtils;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -72,6 +73,20 @@ public class ExchangeClient {
         log.info("Fetched {} cryptocurrencies from LBank", result.size());
 
         return result;
+    }
+
+    public BigDecimal fetchLatestPrice(String symbol) {
+        validateSymbol(symbol);
+
+        URI uri = buildUri(TICKER_24H_PATH, Map.of("symbol", symbol));
+        JsonNode root = executeGet(uri);
+        BigDecimal latestPrice = extractLatestPrice(root, symbol);
+
+        if (latestPrice.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalStateException("LBank returned non-positive latest price for symbol=" + symbol);
+        }
+
+        return latestPrice;
     }
 
     public List<CandleDTO> fetchMinutelyClosingPrices(String symbol, int minutesInterval, int size) {
@@ -190,6 +205,47 @@ public class ExchangeClient {
         cryptoCurrency.setTurnover(getRequiredText(ticker, "turnover"));
 
         return cryptoCurrency;
+    }
+
+    private BigDecimal extractLatestPrice(JsonNode root, String symbol) {
+
+        JsonNode data = root.isObject() ? root.get("data") : root;
+
+        if (data != null && data.isArray()) {
+            for (JsonNode node : data) {
+                String nodeSymbol = node.path("symbol").asText("");
+
+                if (nodeSymbol.isBlank() || symbol.equalsIgnoreCase(nodeSymbol)) {
+                    return parseLatestPrice(node);
+                }
+            }
+        }
+
+        if (data != null && data.isObject()) {
+            return parseLatestPrice(data);
+        }
+
+        if (root.isObject()) {
+            return parseLatestPrice(root);
+        }
+
+        throw new IllegalStateException("LBank ticker response does not contain latest price for symbol=" + symbol);
+    }
+
+    private BigDecimal parseLatestPrice(JsonNode node) {
+
+        JsonNode ticker = node.has("ticker") ? node.get("ticker") : node;
+        JsonNode latest = ticker.get("latest");
+
+        if (latest == null || latest.isNull()) {
+            throw new IllegalStateException("Missing latest price in LBank ticker response");
+        }
+
+        try {
+            return new BigDecimal(latest.asText());
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("Invalid latest price in LBank ticker response: " + latest.asText(), e);
+        }
     }
 
     private CandleDTO parseCandle(JsonNode row) {

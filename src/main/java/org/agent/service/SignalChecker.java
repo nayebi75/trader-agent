@@ -8,6 +8,7 @@ import org.agent.service.dto.TradeSignalDTO;
 import org.agent.utils.DataUtils;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -21,7 +22,17 @@ public class SignalChecker implements Runnable {
     private static final int MINUTES_PER_HOUR = 60;
     private static final long SECONDS_PER_HOUR = 60 * 60;
 
-    private final ExchangeClient exchangeClient = new ExchangeClient();
+    private final ExchangeClient exchangeClient;
+    private final Clock clock;
+
+    public SignalChecker() {
+        this(new ExchangeClient(), Clock.systemUTC());
+    }
+
+    public SignalChecker(ExchangeClient exchangeClient, Clock clock) {
+        this.exchangeClient = exchangeClient;
+        this.clock = clock;
+    }
 
     @Override
     public void run() {
@@ -86,7 +97,7 @@ public class SignalChecker implements Runnable {
                 return;
             }
 
-            List<CandleDTO> candles = loadHourlyCandlesSinceSignal(signal);
+            List<CandleDTO> candles = loadHourlyCandlesSinceDetection(signal);
 
             if (candles.isEmpty()) {
                 log.debug("No candles available after signal for symbol={}", signal.getSymbol());
@@ -103,7 +114,8 @@ public class SignalChecker implements Runnable {
                 applyResolution(signal, resolution);
 
                 log.info(
-                        "Signal resolved symbol={}, status={}, resolutionTimestamp={}, candleTimestamp={}",
+                        "Signal resolved id={}, symbol={}, status={}, resolutionTimestamp={}, candleTimestamp={}",
+                        signal.getId(),
                         signal.getSymbol(),
                         signal.getStatus(),
                         signal.getResolvedAtTimestamp(),
@@ -119,6 +131,18 @@ public class SignalChecker implements Runnable {
     }
 
     private SignalResolution evaluateCandle(TradeSignalDTO signal, CandleDTO candle) {
+
+        long detectedAtTimestamp = signal.getDetectedAtTimestamp();
+        long candleStartTimestamp = candle.getTimestamp();
+        long candleEndTimestamp = candleStartTimestamp + SECONDS_PER_HOUR;
+
+        if (candleEndTimestamp <= detectedAtTimestamp) {
+            return null;
+        }
+
+        if (candleStartTimestamp < detectedAtTimestamp) {
+            return resolveHourlyCandleWithMinuteData(signal, candle, detectedAtTimestamp, false);
+        }
 
         boolean hitTakeProfit = isGreaterThanOrEqual(candle.getHigh(), signal.getTakeProfit());
         boolean hitStopLoss = isLessThanOrEqual(candle.getLow(), signal.getStopLoss());
@@ -145,6 +169,11 @@ public class SignalChecker implements Runnable {
     }
 
     private SignalResolution resolveAmbiguousHourlyCandle(TradeSignalDTO signal, CandleDTO hourlyCandle) {
+        return resolveHourlyCandleWithMinuteData(signal, hourlyCandle, signal.getDetectedAtTimestamp(), true);
+    }
+
+    private SignalResolution resolveHourlyCandleWithMinuteData(TradeSignalDTO signal, CandleDTO hourlyCandle,
+                                                               long earliestTimestamp, boolean conservativeFallback) {
 
         List<CandleDTO> minuteCandles = exchangeClient.fetchMinutelyClosingPricesWithTimestamp(
                 signal.getSymbol(),
@@ -155,18 +184,24 @@ public class SignalChecker implements Runnable {
 
         if (minuteCandles == null || minuteCandles.isEmpty()) {
             log.warn(
-                    "Unable to resolve TP/SL order using minute data for symbol={}, hour={}. Using conservative SL",
+                    "Unable to resolve TP/SL using minute data for symbol={}, hour={}, earliestTimestamp={}",
                     signal.getSymbol(),
-                    hourlyCandle.getTimestamp()
+                    hourlyCandle.getTimestamp(),
+                    earliestTimestamp
             );
 
-            return new SignalResolution(SignalStatus.STOP_LOSS_HIT, hourlyCandle.getTimestamp());
+            if (conservativeFallback) {
+                return new SignalResolution(SignalStatus.STOP_LOSS_HIT, hourlyCandle.getTimestamp());
+            }
+
+            return null;
         }
 
         long hourEndTimestamp = hourlyCandle.getTimestamp() + SECONDS_PER_HOUR;
+        long effectiveStartTimestamp = Math.max(hourlyCandle.getTimestamp(), earliestTimestamp);
 
         List<CandleDTO> sortedMinuteCandles = minuteCandles.stream()
-                .filter(candle -> candle.getTimestamp() >= hourlyCandle.getTimestamp())
+                .filter(candle -> candle.getTimestamp() >= effectiveStartTimestamp)
                 .filter(candle -> candle.getTimestamp() < hourEndTimestamp)
                 .sorted(Comparator.comparingLong(CandleDTO::getTimestamp))
                 .toList();
@@ -208,25 +243,30 @@ public class SignalChecker implements Runnable {
          * This can happen because of exchange data inconsistencies.
          */
         log.warn(
-                "Hourly/minute candle mismatch for symbol={}, timestamp={}. Using conservative SL",
+                "Hourly/minute candle mismatch for symbol={}, timestamp={}, earliestTimestamp={}",
                 signal.getSymbol(),
-                hourlyCandle.getTimestamp()
+                hourlyCandle.getTimestamp(),
+                earliestTimestamp
         );
 
-        return new SignalResolution(SignalStatus.STOP_LOSS_HIT, hourlyCandle.getTimestamp());
+        if (conservativeFallback) {
+            return new SignalResolution(SignalStatus.STOP_LOSS_HIT, hourlyCandle.getTimestamp());
+        }
+
+        return null;
     }
 
-    private List<CandleDTO> loadHourlyCandlesSinceSignal(TradeSignalDTO signal) {
+    private List<CandleDTO> loadHourlyCandlesSinceDetection(TradeSignalDTO signal) {
 
-        long signalTimestamp = signal.getTimestamp();
-        long nowTimestamp = Instant.now().getEpochSecond();
+        long detectedAtTimestamp = signal.getDetectedAtTimestamp();
+        long nowTimestamp = Instant.now(clock).getEpochSecond();
 
-        if (signalTimestamp >= nowTimestamp) {
+        if (detectedAtTimestamp >= nowTimestamp) {
             return List.of();
         }
 
         List<CandleDTO> result = new ArrayList<>();
-        long cursor = signalTimestamp;
+        long cursor = Math.floorDiv(detectedAtTimestamp, SECONDS_PER_HOUR) * SECONDS_PER_HOUR;
 
         while (cursor < nowTimestamp) {
             List<CandleDTO> batch = exchangeClient.fetchHourlyClosingPricesWithTimestamp(
@@ -242,7 +282,7 @@ public class SignalChecker implements Runnable {
 
             List<CandleDTO> sortedBatch = batch.stream()
                     .filter(this::isValidCandle)
-                    .filter(candle -> candle.getTimestamp() >= signalTimestamp)
+                    .filter(candle -> candle.getTimestamp() + SECONDS_PER_HOUR > detectedAtTimestamp)
                     .filter(candle -> candle.getTimestamp() <= nowTimestamp)
                     .sorted(Comparator.comparingLong(CandleDTO::getTimestamp))
                     .toList();
@@ -308,22 +348,23 @@ public class SignalChecker implements Runnable {
             return false;
         }
 
-        if (signal.getTimestamp() <= 0 || signal.getEntryPrice() == null
+        if (signal.getSignalCandleEndTimestamp() <= 0 || signal.getDetectedAtTimestamp() <= 0
+                || signal.getActualEntryPrice() == null
                 || signal.getTakeProfit() == null || signal.getStopLoss() == null) {
             return false;
         }
 
-        if (signal.getEntryPrice().compareTo(BigDecimal.ZERO) <= 0
+        if (signal.getActualEntryPrice().compareTo(BigDecimal.ZERO) <= 0
                 || signal.getTakeProfit().compareTo(BigDecimal.ZERO) <= 0
                 || signal.getStopLoss().compareTo(BigDecimal.ZERO) <= 0) {
             return false;
         }
 
-        if (signal.getStopLoss().compareTo(signal.getEntryPrice()) >= 0) {
+        if (signal.getStopLoss().compareTo(signal.getActualEntryPrice()) >= 0) {
             return false;
         }
 
-        return signal.getTakeProfit().compareTo(signal.getEntryPrice()) > 0;
+        return signal.getTakeProfit().compareTo(signal.getActualEntryPrice()) > 0;
     }
 
     private boolean isGreaterThanOrEqual(double value, BigDecimal target) {

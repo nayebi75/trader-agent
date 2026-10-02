@@ -1,6 +1,5 @@
 package org.agent.service.dto;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -14,21 +13,13 @@ import java.io.Serializable;
 @NoArgsConstructor
 public class CryptoCurrencyDTO implements Serializable, Comparable<CryptoCurrencyDTO> {
 
-    @JsonProperty("high")
     private String high;
-    @JsonProperty("vol")
     private String vol;
-    @JsonProperty("low")
     private String low;
-    @JsonProperty("change")
     private String change;
-    @JsonProperty("turnover")
     private String turnover;
-    @JsonProperty("latest")
     private String latest;
-    @JsonProperty("symbol")
     private String symbol;
-    @JsonProperty("timestamp")
     private Long timestamp;
 
     @Override

@@ -2,11 +2,14 @@ package org.agent.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.agent.constants.SignalStatus;
+import org.agent.client.ExchangeClient;
 import org.agent.service.dto.CryptoCurrencyDTO;
 import org.agent.service.dto.TradeSignalDTO;
 import org.agent.utils.DataUtils;
 import org.apache.commons.lang3.StringUtils;
 
+import java.math.BigDecimal;
+import java.time.Clock;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -15,8 +18,22 @@ public class SignalDetector implements Runnable {
 
     private static final String TIMEFRAME = "4h";
 
-    private final CollectorService collectorService = new CollectorService();
-    private final StrategyService strategyService = new StrategyService();
+    private final CollectorService collectorService;
+    private final StrategyService strategyService;
+    private final ExchangeClient exchangeClient;
+    private final Clock clock;
+
+    public SignalDetector() {
+        this(new CollectorService(), new StrategyService(), new ExchangeClient(), Clock.systemUTC());
+    }
+
+    public SignalDetector(CollectorService collectorService, StrategyService strategyService,
+                          ExchangeClient exchangeClient, Clock clock) {
+        this.collectorService = collectorService;
+        this.strategyService = strategyService;
+        this.exchangeClient = exchangeClient;
+        this.clock = clock;
+    }
 
     @Override
     public void run() {
@@ -54,23 +71,62 @@ public class SignalDetector implements Runnable {
     private void analyzeCryptoCurrency(CryptoCurrencyDTO cryptoCurrencyDTO, AtomicInteger numberOfSignals) {
 
         String symbol = cryptoCurrencyDTO.getSymbol();
+        long latestClosedCandleEndTimestamp = strategyService.getLatestClosedCandleEndTimestamp(symbol);
+        long lastAnalyzedCandleEndTimestamp = DataUtils.loadLastAnalyzedCandleEndTimestamp(symbol, TIMEFRAME);
 
-        StrategyService.AnalysisResult analysisResult = strategyService.cryptoCurrencyAnalysisResult(symbol);
-
-        if (!analysisResult.hasBuySignal()) {
-            logNoBuySignal(symbol, analysisResult.reason());
+        if (latestClosedCandleEndTimestamp <= lastAnalyzedCandleEndTimestamp) {
+            log.debug(
+                    "Skipping symbol={}, timeframe={}, latestClosedCandleEnd={}, lastAnalyzedCandleEnd={}",
+                    symbol,
+                    TIMEFRAME,
+                    latestClosedCandleEndTimestamp,
+                    lastAnalyzedCandleEndTimestamp
+            );
             return;
         }
 
-        saveSignal(symbol, analysisResult);
-        numberOfSignals.incrementAndGet();
+        StrategyService.AnalysisResult analysisResult = strategyService.cryptoCurrencyAnalysisResult(symbol);
+        long analyzedCandleEndTimestamp = resolveAnalyzedCandleEndTimestamp(
+                analysisResult,
+                latestClosedCandleEndTimestamp
+        );
 
+        if (!analysisResult.hasBuySignal()) {
+            logNoBuySignal(symbol, analysisResult.reason());
+            DataUtils.saveLastAnalyzedCandleEndTimestamp(symbol, TIMEFRAME, analyzedCandleEndTimestamp);
+            return;
+        }
+
+        boolean saved = saveSignal(symbol, analysisResult);
+
+        if (saved) {
+            numberOfSignals.incrementAndGet();
+        }
+
+        DataUtils.saveLastAnalyzedCandleEndTimestamp(symbol, TIMEFRAME, analyzedCandleEndTimestamp);
+    }
+
+    private long resolveAnalyzedCandleEndTimestamp(StrategyService.AnalysisResult analysisResult,
+                                                   long latestClosedCandleEndTimestamp) {
+        if (analysisResult.candleEndTimestamp() > 0) {
+            return analysisResult.candleEndTimestamp();
+        }
+
+        return latestClosedCandleEndTimestamp;
+    }
+
+    private void logSavedSignal(String symbol, long detectedAtTimestamp, StrategyService.AnalysisResult analysisResult,
+                                BigDecimal actualEntryPrice, BigDecimal takeProfit) {
         log.info(
-                "Buy signal saved for symbol={}, entry={}, stopLoss={}, takeProfit={}, rsi={}, riskReward={}",
+                "Buy signal saved for symbol={}, signalCandleEnd={}, detectedAt={}, referenceEntry={}, "
+                        + "actualEntry={}, stopLoss={}, takeProfit={}, rsi={}, riskReward={}",
                 symbol,
+                analysisResult.candleEndTimestamp(),
+                detectedAtTimestamp,
                 analysisResult.referenceEntryPrice(),
+                actualEntryPrice,
                 analysisResult.stopLoss(),
-                analysisResult.takeProfit(),
+                takeProfit,
                 analysisResult.rsi(),
                 analysisResult.riskRewardRatio()
         );
@@ -80,23 +136,52 @@ public class SignalDetector implements Runnable {
         log.debug("No buy signal for symbol: {}, {}", StringUtils.leftPad(symbol, 17, "_"), cause);
     }
 
-    private void saveSignal(String symbol, StrategyService.AnalysisResult analysisResult) {
+    private boolean saveSignal(String symbol, StrategyService.AnalysisResult analysisResult) {
 
         validateAnalysisResult(symbol, analysisResult);
+
+        long detectedAtTimestamp = clock.instant().getEpochSecond();
+        BigDecimal actualEntryPrice = exchangeClient.fetchLatestPrice(symbol);
+        BigDecimal takeProfit = calculateTakeProfitFromActualEntry(actualEntryPrice, analysisResult);
+
+        if (takeProfit == null) {
+            log.warn("Skipping signal for symbol={} because actualEntry={} is not above stopLoss={}",
+                    symbol,
+                    actualEntryPrice,
+                    analysisResult.stopLoss()
+            );
+            return false;
+        }
 
         TradeSignalDTO tradeSignal = TradeSignalDTO.builder()
                 .symbol(symbol)
                 .timeframe(TIMEFRAME)
-                .entryPrice(analysisResult.referenceEntryPrice())
+                .referenceEntryPrice(analysisResult.referenceEntryPrice())
+                .actualEntryPrice(actualEntryPrice)
                 .stopLoss(analysisResult.stopLoss())
-                .takeProfit(analysisResult.takeProfit())
+                .takeProfit(takeProfit)
                 .rsi(analysisResult.rsi())
                 .riskRewardRatio(analysisResult.riskRewardRatio())
-                .timestamp(analysisResult.candleEndTimestamp())
+                .signalCandleEndTimestamp(analysisResult.candleEndTimestamp())
+                .detectedAtTimestamp(detectedAtTimestamp)
                 .status(SignalStatus.OPEN)
                 .build();
 
         DataUtils.saveSignal(tradeSignal);
+        logSavedSignal(symbol, detectedAtTimestamp, analysisResult, actualEntryPrice, takeProfit);
+        return true;
+    }
+
+    private BigDecimal calculateTakeProfitFromActualEntry(BigDecimal actualEntryPrice,
+                                                          StrategyService.AnalysisResult analysisResult) {
+        BigDecimal risk = actualEntryPrice.subtract(analysisResult.stopLoss());
+
+        if (risk.compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+
+        BigDecimal reward = risk.multiply(BigDecimal.valueOf(analysisResult.riskRewardRatio()));
+        return actualEntryPrice.add(reward);
     }
 
     private void validateAnalysisResult(String symbol, StrategyService.AnalysisResult analysisResult) {

@@ -1,6 +1,5 @@
 package org.agent.service.dto;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -9,6 +8,7 @@ import org.agent.constants.SignalStatus;
 
 import java.io.Serializable;
 import java.math.BigDecimal;
+import java.util.UUID;
 
 @Data
 @Builder
@@ -16,33 +16,35 @@ import java.math.BigDecimal;
 @NoArgsConstructor
 public class TradeSignalDTO implements Serializable {
 
-    @JsonProperty("symbol")
+    @Builder.Default
+    private String id = UUID.randomUUID().toString();
+
     private String symbol;
 
     /**
      * Example:
      * "4h"
      */
-    @JsonProperty("timeframe")
     private String timeframe;
 
     /**
      * Reference price of the CLOSED candle
      * that generated the signal.
      */
-    @JsonProperty("entryPrice")
-    private BigDecimal entryPrice;
+    private BigDecimal referenceEntryPrice;
 
-    @JsonProperty("stopLoss")
+    /**
+     * Current executable/market price when the running application detected the signal.
+     */
+    private BigDecimal actualEntryPrice;
+
     private BigDecimal stopLoss;
 
-    @JsonProperty("takeProfit")
     private BigDecimal takeProfit;
 
     /**
      * Useful for later strategy analysis.
      */
-    @JsonProperty("rsi")
     private double rsi;
 
     /**
@@ -54,24 +56,25 @@ public class TradeSignalDTO implements Serializable {
      * <p>
      * inside an arbitrary result String.
      */
-    @JsonProperty("riskRewardRatio")
     private double riskRewardRatio;
 
     /**
      * End timestamp of the CLOSED candle
      * that produced the signal.
      */
-    @JsonProperty("timestamp")
-    private long timestamp;
+    private long signalCandleEndTimestamp;
+
+    /**
+     * Actual timestamp when the running application detected and persisted the signal.
+     */
+    private long detectedAtTimestamp;
 
     @Builder.Default
-    @JsonProperty("status")
     private SignalStatus status = SignalStatus.OPEN;
 
     /**
      * Null until TP / SL / expiration / cancellation.
      */
-    @JsonProperty("resolvedAtTimestamp")
     private Long resolvedAtTimestamp;
 
 }
